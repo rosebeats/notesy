@@ -11,3 +11,4 @@ crate-type = ["cdylib"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+zmq = { git = "https://github.com/rosebeats/rust-zmq.git" }

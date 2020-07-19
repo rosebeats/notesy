@@ -1,18 +1,21 @@
-use std::io::prelude::*;
-use std::{
-    fs::File,
-    os::unix::io::FromRawFd,
-};
+use std::ffi::c_void;
+use std::{ptr};
 
 #[no_mangle]
-pub extern "C" fn test_thread(fd_pipe: [i32; 2]) {
-    let mut f = unsafe { File::from_raw_fd(fd_pipe[0]) };
-    let mut received = [0; 1];
+pub extern "C" fn test_thread(context_ptr: *mut c_void) -> *mut c_void {
+    // get context from main thread and set up a connection
+    let ctx = unsafe{ zmq::Context::from_raw(context_ptr) };
+    let main_socket = ctx.socket(zmq::PAIR).unwrap();
+    main_socket.connect("inproc://test").unwrap();
     
-    let readres = f.read(&mut received).unwrap();
-    if readres != 0 {
-        println!("{}", received[0]);
+    loop {
+        let message = main_socket.recv_string(0).unwrap().unwrap();
+        println!("{}", message);
+        if message.eq("stop") {
+            break;
+        }
     }
+    ptr::null_mut()
 }
 
 #[cfg(test)]

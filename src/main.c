@@ -3,25 +3,6 @@
 #include <notesy_core/core.h>
 #include <zmq.h>
 
-static char *
-s_recv (void *socket) {
-    enum { cap = 256 };
-    char buffer [cap];
-    int size = zmq_recv (socket, buffer, cap - 1, 0);
-    if (size == -1)
-        return NULL;
-    buffer[size < cap ? size : cap - 1] = '\0';
-
-#if (defined (WIN32))
-    return strdup (buffer);
-#else
-    return strndup (buffer, sizeof(buffer) - 1);
-#endif
-
-    // remember that the strdup family of functions use malloc/alloc for space for the new string.  It must be manually
-    // freed when you are done with it.  Failure to do so will allow a heap attack.
-}
-
 static int
 s_send (void *socket, char *string) {
     int size = zmq_send (socket, string, strlen (string), 0);
@@ -32,14 +13,6 @@ s_send (void *socket, char *string) {
 static cairo_surface_t *surface = NULL;
 static pthread_t compute_thread;
 void *computation_conn;
-
-static void *test(void *zmq_context) {
-    void *main_conn = zmq_socket(zmq_context, ZMQ_PAIR);
-    zmq_connect(main_conn, "inproc://test");
-    
-    s_send(main_conn, "test");
-    return 0;
-}
 
 static void clear_surface() {
     cairo_t *cr;
@@ -111,9 +84,11 @@ static gboolean editor_button_press(GtkWidget *widget,
     
     // start drawing
     if(event->button == GDK_BUTTON_PRIMARY) {
+        s_send(computation_conn, "begin drawing!");
         draw_brush(widget, event->x, event->y);
     // clear canvas
     } else if(event->button == GDK_BUTTON_SECONDARY) {
+        s_send(computation_conn, "clearing canvas!");
         clear_surface();
         // redraw the widget since there has been a change
         gtk_widget_queue_draw(widget);
@@ -130,6 +105,7 @@ static gboolean editor_motion(GtkWidget *widget,
     
     if(event->state & GDK_BUTTON1_MASK) {
         draw_brush(widget, event->x, event->y);
+        s_send(computation_conn, "drawing!");
     }
     
     return TRUE;
@@ -168,6 +144,8 @@ static void activate(GtkApplication* app, gpointer user_data) {
                                 | GDK_POINTER_MOTION_MASK);
     
     gtk_widget_show_all(window);
+    
+    s_send(computation_conn, "created window");
 }
 
 static gboolean process_zmq(GIOChannel *source,
@@ -178,7 +156,7 @@ static gboolean process_zmq(GIOChannel *source,
     
     while(1) {
         if(zmq_getsockopt(computation_conn, ZMQ_EVENTS, &status, &sizeof_status)) {
-            fprintf(stderr, "Error retrieving event status");
+            perror("Error retrieving event status");
             exit(1);
         }
         if((status & ZMQ_POLLIN) == 0) {
@@ -186,9 +164,7 @@ static gboolean process_zmq(GIOChannel *source,
         }
         
         // message handling
-        char *new_message = s_recv(computation_conn);
-        printf("%s\n", new_message);
-        free(new_message);
+        break;
     }
     return 1;
 }
@@ -206,7 +182,7 @@ int main(int argc, char *argv[]) {
     zmq_bind(computation_conn, "inproc://test");
     
     // start computational thread
-    if(pthread_create(&compute_thread, NULL, test, zmq_context)) {
+    if(pthread_create(&compute_thread, NULL, test_thread, zmq_context)) {
         fprintf(stderr, "Error spawning computational thread, aborting.\n");
         exit(1);
     }
@@ -226,12 +202,13 @@ int main(int argc, char *argv[]) {
     GIOChannel* zmq_channel = g_io_channel_unix_new(zmq_fd);
     g_io_add_watch(zmq_channel, G_IO_IN|G_IO_ERR|G_IO_HUP, process_zmq, NULL);
     
+    s_send(computation_conn, "finished initializing");
+    
     // run the app
     status = g_application_run(G_APPLICATION(app), argc, argv);
     
     // garbage collect
-    zmq_close(computation_conn);
-    zmq_ctx_destroy(zmq_context);
+    s_send(computation_conn, "stop");
     g_object_unref(app);
     
     return status;
