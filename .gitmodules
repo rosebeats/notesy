@@ -1,0 +1,3 @@
+[submodule "notesy_core"]
+	path = notesy_core
+	url = https://github.com/rosebeats/notesy_core
