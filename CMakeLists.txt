@@ -1,21 +1,34 @@
 # cmake version
-cmake_minimum_required( VERSION 3.0 )
+cmake_minimum_required( VERSION 3.1 )
 
 # project name
 project( notesy )
+
+add_subdirectory(notesy_core)
 
 # use PkgConfig to detect GTK+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK3 REQUIRED gtk+-3.0)
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 # include and link dirs
-include_directories( ./include ./src ${GTK3_INCLUDE_DIRS} )
-link_directories(${GTK3_LIBRARY_DIRS})
+include_directories( ./include ./notesy_core/include ./src ${GTK3_INCLUDE_DIRS} )
+# link_directories(${GTK3_LIBRARY_DIRS})
 
 # target
 add_executable( notesy ./src/main.c )
 
+# get core lib location
+get_target_property(CORE_DIR notesy_core LOCATION)
+
 target_link_libraries(notesy ${GTK3_LIBRARIES})
+target_link_libraries(notesy ${CORE_DIR}/libnotesy_core.so)
+target_link_libraries(notesy Threads::Threads)
+target_link_libraries(notesy zmq)
+
+add_dependencies(notesy notesy_core)
 
 # external libs
 # add_subdirectory( ./libs/Library )

@@ -1,7 +1,45 @@
+#include <pthread.h>
 #include <gtk/gtk.h>
+#include <notesy_core/core.h>
+#include <zmq.h>
+
+static char *
+s_recv (void *socket) {
+    enum { cap = 256 };
+    char buffer [cap];
+    int size = zmq_recv (socket, buffer, cap - 1, 0);
+    if (size == -1)
+        return NULL;
+    buffer[size < cap ? size : cap - 1] = '\0';
+
+#if (defined (WIN32))
+    return strdup (buffer);
+#else
+    return strndup (buffer, sizeof(buffer) - 1);
+#endif
+
+    // remember that the strdup family of functions use malloc/alloc for space for the new string.  It must be manually
+    // freed when you are done with it.  Failure to do so will allow a heap attack.
+}
+
+static int
+s_send (void *socket, char *string) {
+    int size = zmq_send (socket, string, strlen (string), 0);
+    return size;
+}
 
 // cairo surface to store
 static cairo_surface_t *surface = NULL;
+static pthread_t compute_thread;
+void *computation_conn;
+
+static void *test(void *zmq_context) {
+    void *main_conn = zmq_socket(zmq_context, ZMQ_PAIR);
+    zmq_connect(main_conn, "inproc://test");
+    
+    s_send(main_conn, "test");
+    return 0;
+}
 
 static void clear_surface() {
     cairo_t *cr;
@@ -126,24 +164,74 @@ static void activate(GtkApplication* app, gpointer user_data) {
     
     // allow recieving of mouse and keyboard events
     gtk_widget_set_events(editor, gtk_widget_get_events(editor)
-                                    | GDK_BUTTON_PRESS_MASK
-                                    | GDK_POINTER_MOTION_MASK);
+                                | GDK_BUTTON_PRESS_MASK
+                                | GDK_POINTER_MOTION_MASK);
     
     gtk_widget_show_all(window);
 }
 
+static gboolean process_zmq(GIOChannel *source,
+                            GIOCondition condition,
+                            gpointer data) {
+    uint32_t status;
+    size_t sizeof_status = sizeof(status);
+    
+    while(1) {
+        if(zmq_getsockopt(computation_conn, ZMQ_EVENTS, &status, &sizeof_status)) {
+            fprintf(stderr, "Error retrieving event status");
+            exit(1);
+        }
+        if((status & ZMQ_POLLIN) == 0) {
+            break;
+        }
+        
+        // message handling
+        char *new_message = s_recv(computation_conn);
+        printf("%s\n", new_message);
+        free(new_message);
+    }
+    return 1;
+}
+
 int main(int argc, char *argv[]) {
+    // main app and window
     GtkApplication *app;
     GtkWidget *window;
+    // exit status of GTK
     int status;
+    
+    // create a zmq context and start a inproc socket
+    void *zmq_context = zmq_ctx_new();
+    computation_conn = zmq_socket(zmq_context, ZMQ_PAIR);
+    zmq_bind(computation_conn, "inproc://test");
+    
+    // start computational thread
+    if(pthread_create(&compute_thread, NULL, test, zmq_context)) {
+        fprintf(stderr, "Error spawning computational thread, aborting.\n");
+        exit(1);
+    }
     
     // create application
     app = gtk_application_new("notesy.base", G_APPLICATION_FLAGS_NONE);
     // connect startup event
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    
+    // get the zmq file descriptor and listen with GTK
+    int zmq_fd;
+    size_t sizeof_zmq_fd = sizeof(zmq_fd);
+    if(zmq_getsockopt(computation_conn, ZMQ_FD, &zmq_fd, &sizeof_zmq_fd)) {
+        fprintf(stderr, "Failed to retrieve zmq file descriptor");
+        exit(1);
+    }
+    GIOChannel* zmq_channel = g_io_channel_unix_new(zmq_fd);
+    g_io_add_watch(zmq_channel, G_IO_IN|G_IO_ERR|G_IO_HUP, process_zmq, NULL);
+    
     // run the app
     status = g_application_run(G_APPLICATION(app), argc, argv);
+    
     // garbage collect
+    zmq_close(computation_conn);
+    zmq_ctx_destroy(zmq_context);
     g_object_unref(app);
     
     return status;
