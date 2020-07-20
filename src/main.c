@@ -2,6 +2,7 @@
 #include <gtk/gtk.h>
 #include <notesy_core/core.h>
 #include <zmq.h>
+#include <protobuf-c/protobuf-c.h>
 
 static int
 s_send (void *socket, char *string) {
