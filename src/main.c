@@ -3,12 +3,7 @@
 #include <notesy_core/core.h>
 #include <zmq.h>
 #include <protobuf-c/protobuf-c.h>
-
-static int
-s_send (void *socket, char *string) {
-    int size = zmq_send (socket, string, strlen (string), 0);
-    return size;
-}
+#include "protobuf/threading.pb-c.h"
 
 // cairo surface to store
 static cairo_surface_t *surface = NULL;
@@ -85,11 +80,9 @@ static gboolean editor_button_press(GtkWidget *widget,
     
     // start drawing
     if(event->button == GDK_BUTTON_PRIMARY) {
-        s_send(computation_conn, "begin drawing!");
         draw_brush(widget, event->x, event->y);
     // clear canvas
     } else if(event->button == GDK_BUTTON_SECONDARY) {
-        s_send(computation_conn, "clearing canvas!");
         clear_surface();
         // redraw the widget since there has been a change
         gtk_widget_queue_draw(widget);
@@ -106,7 +99,6 @@ static gboolean editor_motion(GtkWidget *widget,
     
     if(event->state & GDK_BUTTON1_MASK) {
         draw_brush(widget, event->x, event->y);
-        s_send(computation_conn, "drawing!");
     }
     
     return TRUE;
@@ -145,8 +137,6 @@ static void activate(GtkApplication* app, gpointer user_data) {
                                 | GDK_POINTER_MOTION_MASK);
     
     gtk_widget_show_all(window);
-    
-    s_send(computation_conn, "created window");
 }
 
 static gboolean process_zmq(GIOChannel *source,
@@ -164,6 +154,13 @@ static gboolean process_zmq(GIOChannel *source,
             break;
         }
         
+        zmq_msg_t message;
+        zmq_msg_init(&message);
+        zmq_msg_recv(&message, computation_conn, 0);
+        size_t msg_size = zmq_msg_size(&message);
+        uint8_t *raw = zmq_msg_data(&message);
+        Notesy__Messaging__ServerMsg *contents = notesy__messaging__server_msg__unpack(NULL, msg_size, raw);
+        printf("%s\n", contents->test);
         // message handling
         break;
     }
@@ -203,13 +200,10 @@ int main(int argc, char *argv[]) {
     GIOChannel* zmq_channel = g_io_channel_unix_new(zmq_fd);
     g_io_add_watch(zmq_channel, G_IO_IN|G_IO_ERR|G_IO_HUP, process_zmq, NULL);
     
-    s_send(computation_conn, "finished initializing");
-    
     // run the app
     status = g_application_run(G_APPLICATION(app), argc, argv);
     
     // garbage collect
-    s_send(computation_conn, "stop");
     g_object_unref(app);
     
     return status;
