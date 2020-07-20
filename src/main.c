@@ -4,6 +4,7 @@
 #include <zmq.h>
 #include <protobuf-c/protobuf-c.h>
 #include "protobuf/threading.pb-c.h"
+#include <stdbool.h>
 
 // cairo surface to store
 static cairo_surface_t *surface = NULL;
@@ -154,13 +155,22 @@ static gboolean process_zmq(GIOChannel *source,
             break;
         }
         
+        // get message from zmq
         zmq_msg_t message;
         zmq_msg_init(&message);
         zmq_msg_recv(&message, computation_conn, 0);
+        
+        // get size and data from zmq
         size_t msg_size = zmq_msg_size(&message);
         uint8_t *raw = zmq_msg_data(&message);
+        
+        // unpack message as protobuf and print
         Notesy__Messaging__ServerMsg *contents = notesy__messaging__server_msg__unpack(NULL, msg_size, raw);
         printf("%s\n", contents->test);
+        
+        //release protobuf, then zmq
+        notesy__messaging__server_msg__free_unpacked(contents, NULL);
+        zmq_msg_close(&message);
         // message handling
         break;
     }
@@ -204,6 +214,23 @@ int main(int argc, char *argv[]) {
     status = g_application_run(G_APPLICATION(app), argc, argv);
     
     // garbage collect
+    // create ClientMsg protobuf and set values
+    Notesy__Messaging__ClientMsg contents = NOTESY__MESSAGING__CLIENT_MSG__INIT;
+    contents.shutdown = true;
+    
+    // get the size of the protobuf
+    size_t size = notesy__messaging__client_msg__get_packed_size(&contents);
+    
+    //initialize a zmq message
+    zmq_msg_t message;
+    zmq_msg_init_size(&message, size);
+    
+    // pack protobuf into message
+    notesy__messaging__client_msg__pack(&contents, zmq_msg_data(&message));
+    
+    // send message
+    zmq_msg_send(&message, computation_conn, 0);
+    
     g_object_unref(app);
     
     return status;
