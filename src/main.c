@@ -1,15 +1,13 @@
 #include <pthread.h>
+
 #include <gtk/gtk.h>
+
 #include <notesy_core/core.h>
-#include <zmq.h>
-#include <protobuf-c/protobuf-c.h>
-#include "protobuf/threading.pb-c.h"
-#include <stdbool.h>
+
+#include "thread_comm.h"
 
 // cairo surface to store
 static cairo_surface_t *surface = NULL;
-static pthread_t compute_thread;
-void *computation_conn;
 
 static void clear_surface() {
     cairo_t *cr;
@@ -140,97 +138,37 @@ static void activate(GtkApplication* app, gpointer user_data) {
     gtk_widget_show_all(window);
 }
 
-static gboolean process_zmq(GIOChannel *source,
-                            GIOCondition condition,
-                            gpointer data) {
-    uint32_t status;
-    size_t sizeof_status = sizeof(status);
-    
-    while(1) {
-        if(zmq_getsockopt(computation_conn, ZMQ_EVENTS, &status, &sizeof_status)) {
-            perror("Error retrieving event status");
-            exit(1);
-        }
-        if((status & ZMQ_POLLIN) == 0) {
-            break;
-        }
-        
-        // get message from zmq
-        zmq_msg_t message;
-        zmq_msg_init(&message);
-        zmq_msg_recv(&message, computation_conn, 0);
-        
-        // get size and data from zmq
-        size_t msg_size = zmq_msg_size(&message);
-        uint8_t *raw = zmq_msg_data(&message);
-        
-        // unpack message as protobuf and print
-        Notesy__Messaging__ServerMsg *contents = notesy__messaging__server_msg__unpack(NULL, msg_size, raw);
-        printf("%s\n", contents->test);
-        
-        //release protobuf, then zmq
-        notesy__messaging__server_msg__free_unpacked(contents, NULL);
-        zmq_msg_close(&message);
-        // message handling
-        break;
-    }
-    return 1;
-}
-
 int main(int argc, char *argv[]) {
     // main app and window
     GtkApplication *app;
     GtkWidget *window;
     // exit status of GTK
     int status;
-    
-    // create a zmq context and start a inproc socket
-    void *zmq_context = zmq_ctx_new();
-    computation_conn = zmq_socket(zmq_context, ZMQ_PAIR);
-    zmq_bind(computation_conn, "inproc://test");
-    
-    // start computational thread
-    if(pthread_create(&compute_thread, NULL, test_thread, zmq_context)) {
-        fprintf(stderr, "Error spawning computational thread, aborting.\n");
-        exit(1);
-    }
+    // the background thread
+    pthread_t compute_thread;
+    // the thread context
+    void *thread_context;
     
     // create application
     app = gtk_application_new("notesy.base", G_APPLICATION_FLAGS_NONE);
     // connect startup event
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    // initialize thread communication
+    thread_context = thread_comm_init();
     
-    // get the zmq file descriptor and listen with GTK
-    int zmq_fd;
-    size_t sizeof_zmq_fd = sizeof(zmq_fd);
-    if(zmq_getsockopt(computation_conn, ZMQ_FD, &zmq_fd, &sizeof_zmq_fd)) {
-        fprintf(stderr, "Failed to retrieve zmq file descriptor");
+    // start computational thread
+    if(pthread_create(&compute_thread, NULL, test_thread, thread_context)) {
+        fprintf(stderr, "Error spawning computational thread, aborting.\n");
         exit(1);
     }
-    GIOChannel* zmq_channel = g_io_channel_unix_new(zmq_fd);
-    g_io_add_watch(zmq_channel, G_IO_IN|G_IO_ERR|G_IO_HUP, process_zmq, NULL);
     
     // run the app
     status = g_application_run(G_APPLICATION(app), argc, argv);
     
     // garbage collect
-    // create ClientMsg protobuf and set values
-    Notesy__Messaging__ClientMsg contents = NOTESY__MESSAGING__CLIENT_MSG__INIT;
-    contents.shutdown = true;
-    
-    // get the size of the protobuf
-    size_t size = notesy__messaging__client_msg__get_packed_size(&contents);
-    
-    //initialize a zmq message
-    zmq_msg_t message;
-    zmq_msg_init_size(&message, size);
-    
-    // pack protobuf into message
-    notesy__messaging__client_msg__pack(&contents, zmq_msg_data(&message));
-    
-    // send message
-    zmq_msg_send(&message, computation_conn, 0);
-    
+    // shutdown background thread
+    thread_comm_shutdown();
+    // clean up app
     g_object_unref(app);
     
     return status;

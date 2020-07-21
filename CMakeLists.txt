@@ -39,7 +39,7 @@ include_directories( ./include ./notesy_core/include ./src ${PROTOBUF_DIR} ${GTK
 # link_directories(${GTK3_LIBRARY_DIRS})
 
 # target
-add_executable( notesy ./src/main.c ${PROTOBUF_OUTPUT} )
+add_executable( notesy ./src/main.c ./src/thread_comm.c ${PROTOBUF_OUTPUT} )
 
 # get core lib location
 get_target_property(CORE_DIR notesy_core LOCATION)
